@@ -1,0 +1,9 @@
+{
+  "registrationDay": "thursday",
+  "classes": [
+    { "day": "sunday", "time": "07:00", "name": "CrossFit" },
+    { "day": "monday", "time": "18:30" },
+    { "day": "wednesday", "time": "07:00", "name": "WOD" },
+    { "day": "thursday", "time": "07:00" }
+  ]
+}

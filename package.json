@@ -1,0 +1,14 @@
+{
+  "name": "arbox-auto-register",
+  "version": "1.0.0",
+  "description": "Automatically register for Arbox fitness classes when registration opens",
+  "type": "module",
+  "scripts": {
+    "register": "node src/register.mjs",
+    "setup": "node src/setup.mjs"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "license": "MIT"
+}

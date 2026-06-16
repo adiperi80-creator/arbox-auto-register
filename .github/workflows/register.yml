@@ -1,0 +1,25 @@
+name: Arbox Auto-Register
+
+on:
+  schedule:
+    # Runs daily at 12:00 and 13:00 UTC to cover both DST modes
+    # (one of them is always 3pm Israel time).
+    # The script checks config.registrationDay and skips non-matching days.
+    - cron: '0 12 * * *'
+    - cron: '0 13 * * *'
+  workflow_dispatch: {}
+
+jobs:
+  register:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: node src/register.mjs
+        env:
+          ARBOX_EMAIL: ${{ secrets.ARBOX_EMAIL }}
+          ARBOX_PASSWORD: ${{ secrets.ARBOX_PASSWORD }}
+          ARBOX_CONFIG: ${{ secrets.ARBOX_CONFIG }}
+          ARBOX_FORCE_RUN: ${{ github.event_name == 'workflow_dispatch' && 'true' || '' }}
