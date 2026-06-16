@@ -177,12 +177,16 @@ async function main() {
       const extra = r.error ? ` — ${r.error}` : '';
       return `${icon} ${desc}${extra}`;
     });
+    const tuesdayStrength = results.find(r => r.day === 'tuesday' && r.time === '07:00');
+    const missedStrength = !tuesdayStrength || !['registered', 'already_registered'].includes(tuesdayStrength.status);
+
     const summary = [
       `Arbox Auto-Register — ${new Date().toLocaleDateString('en-IL', { timeZone: 'Asia/Jerusalem', weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}`,
       '',
       ...lines,
       '',
       Object.entries(counts).map(([s, c]) => `${s}: ${c}`).join(' | '),
+      ...(missedStrength ? ['', '🫵 Why didn\'t you register to Strength bitch?'] : []),
     ].join('\n');
     writeFileSync(summaryPath, summary);
   }
