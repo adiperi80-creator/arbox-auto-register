@@ -109,6 +109,7 @@ async function main() {
   console.log(`Found ${schedule.length} classes in schedule\n`);
 
   const results = [];
+  const delay = (ms) => new Promise(r => setTimeout(r, ms));
 
   for (const wanted of config.classes) {
     const match = schedule.find(entry => matchClass(entry, wanted));
@@ -140,6 +141,7 @@ async function main() {
         console.log(`[SKIP] ${label}: registration not open yet`);
         results.push({ ...wanted, status: 'not_yet_open', label });
       } else if (msg.includes('full') || msg.includes('waiting list') || msg.includes('waitlist')) {
+        await delay(1000);
         try {
           await registerForClass(auth, match.id, membershipUserId, true);
           console.log(`[WAITLIST] ${label}: joined waitlist`);
@@ -153,6 +155,8 @@ async function main() {
         results.push({ ...wanted, status: 'error', label, error: err.message });
       }
     }
+
+    await delay(500);
   }
 
   console.log('\n=== Summary ===');
