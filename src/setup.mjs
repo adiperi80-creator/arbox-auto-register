@@ -1,5 +1,5 @@
 import { createInterface } from 'readline';
-import { writeFileSync } from 'fs';
+import { readFileSync, writeFileSync } from 'fs';
 import { login, getMembership, getSchedule } from './arbox-client.mjs';
 
 const DAYS = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
@@ -8,10 +8,33 @@ const VALID_TIME = /^\d{2}:\d{2}$/;
 const rl = createInterface({ input: process.stdin, output: process.stdout });
 const ask = (q) => new Promise(resolve => rl.question(q, resolve));
 
-async function selectFromSchedule(allClasses) {
-  console.log('Enter the numbers of classes you want to auto-register for.');
-  console.log('Separate with commas (e.g., 1,3,5,12).\n');
+async function confirm(question) {
+  const answer = await ask(`${question} (y/n): `);
+  return answer.trim().toLowerCase() !== 'n';
+}
 
+function loadExistingEnv() {
+  try {
+    const lines = readFileSync(new URL('../.env', import.meta.url), 'utf-8').split('\n');
+    const env = {};
+    for (const line of lines) {
+      const [key, ...rest] = line.split('=');
+      if (key && rest.length) env[key.trim()] = rest.join('=').trim();
+    }
+    if (env.ARBOX_EMAIL && env.ARBOX_PASSWORD) return env;
+  } catch {}
+  return null;
+}
+
+function loadExistingConfig() {
+  try {
+    return JSON.parse(readFileSync(new URL('../config.json', import.meta.url), 'utf-8'));
+  } catch {}
+  return null;
+}
+
+async function selectFromSchedule(allClasses) {
+  console.log('Enter the numbers of classes you want (e.g., 1,3,5).\n');
   const selection = await ask('Select classes: ');
   const selectedNums = selection.split(',').map(s => parseInt(s.trim())).filter(n => !isNaN(n));
 
@@ -22,34 +45,38 @@ async function selectFromSchedule(allClasses) {
 }
 
 async function enterManually() {
-  console.log('Enter your classes one by one. Type "done" when finished.\n');
+  console.log('Enter your classes one by one.\n');
 
   const classes = [];
   let i = 1;
   while (true) {
     console.log(`Class ${i}:`);
-    const dayInput = await ask('  Day (e.g., sunday): ');
-    if (dayInput.trim().toLowerCase() === 'done') break;
 
-    const day = dayInput.trim().toLowerCase();
-    if (!DAYS.includes(day)) {
-      console.log(`  "${dayInput.trim()}" is not a valid day. Try again.\n`);
-      continue;
+    let day;
+    while (true) {
+      const dayInput = await ask('  Day (e.g., sunday): ');
+      day = dayInput.trim().toLowerCase();
+      if (DAYS.includes(day)) break;
+      console.log(`  "${dayInput.trim()}" is not a valid day. Try again.`);
     }
 
-    const time = await ask('  Time (e.g., 07:00): ');
-    if (!VALID_TIME.test(time.trim())) {
-      console.log(`  "${time.trim()}" is not a valid time. Use HH:MM format (e.g., 07:00). Try again.\n`);
-      continue;
+    let time;
+    while (true) {
+      const timeInput = await ask('  Time (e.g., 07:00): ');
+      time = timeInput.trim();
+      if (VALID_TIME.test(time)) break;
+      console.log(`  "${time}" is not valid. Use HH:MM format (e.g., 07:00). Try again.`);
     }
 
-    const name = await ask('  Class name (optional, press Enter to skip): ');
-
-    const entry = { day, time: time.trim() };
-    if (name.trim()) entry.name = name.trim();
+    const nameInput = await ask('  Class name (optional, press Enter to skip): ');
+    const entry = { day, time };
+    if (nameInput.trim()) entry.name = nameInput.trim();
     classes.push(entry);
-    console.log();
     i++;
+
+    console.log();
+    if (!await confirm('Add another class?')) break;
+    console.log();
   }
   return classes;
 }
@@ -57,10 +84,25 @@ async function enterManually() {
 async function main() {
   console.log('\n=== Arbox Auto-Register Setup ===\n');
 
-  const email = await ask('Arbox email: ');
-  const password = await ask('Arbox password: ');
+  // --- Credentials ---
+  let email, password;
+  const existingEnv = loadExistingEnv();
+  if (existingEnv) {
+    console.log(`Found saved credentials for ${existingEnv.ARBOX_EMAIL}.`);
+    if (await confirm('Use these?')) {
+      email = existingEnv.ARBOX_EMAIL;
+      password = existingEnv.ARBOX_PASSWORD;
+    }
+    console.log();
+  }
+  if (!email) {
+    email = await ask('Arbox email: ');
+    password = await ask('Arbox password: ');
+    console.log();
+  }
 
-  console.log('\nLogging in...');
+  // --- Login ---
+  console.log('Logging in...');
   let auth;
   try {
     auth = await login(email, password);
@@ -72,6 +114,7 @@ async function main() {
 
   const membershipUserId = await getMembership(auth);
 
+  // --- Fetch schedule ---
   const today = new Date();
   const from = today.toISOString().split('T')[0];
   const endDate = new Date(today);
@@ -81,7 +124,6 @@ async function main() {
   console.log(`Fetching schedule for ${from} → ${to}...\n`);
   const schedule = await getSchedule(auth, from, to);
 
-  // Group and display schedule
   const grouped = {};
   for (const entry of schedule) {
     const date = entry.date;
@@ -112,55 +154,81 @@ async function main() {
     console.log('No classes found in the schedule for the next 7 days.\n');
   }
 
-  // Choose selection method
-  let selectedClasses;
+  // --- Check existing config ---
+  const existingConfig = loadExistingConfig();
+  let selectedClasses = null;
+  let regDay = null;
+  let regTime = null;
 
-  if (allClasses.length > 0) {
-    console.log('How do you want to select classes?');
-    console.log('  1. Pick from the schedule above (by number)');
-    console.log('  2. Enter day + time manually\n');
-    const method = await ask('Choose 1 or 2: ');
-
-    if (method.trim() === '2') {
-      selectedClasses = await enterManually();
-    } else {
-      selectedClasses = await selectFromSchedule(allClasses);
+  if (existingConfig?.classes?.length) {
+    console.log('--- Current config ---\n');
+    console.log('Classes:');
+    for (const c of existingConfig.classes) {
+      console.log(`  ${c.day} ${c.time}${c.name ? ` — ${c.name}` : ''}`);
     }
-  } else {
-    console.log('You can enter your classes manually by day and time.\n');
-    selectedClasses = await enterManually();
+    const day = existingConfig.registrationDay || 'every day';
+    const time = existingConfig.registrationTime || '15:00';
+    console.log(`\nRegistration schedule: ${day} at ${time}\n`);
+
+    if (!await confirm('Change class selection?')) {
+      selectedClasses = existingConfig.classes;
+    }
+
+    if (!await confirm('Change registration schedule?')) {
+      regDay = existingConfig.registrationDay || null;
+      regTime = existingConfig.registrationTime || '15:00';
+    }
+    console.log();
   }
 
-  if (selectedClasses.length === 0) {
-    console.log('No classes selected. Exiting.');
-    process.exit(0);
+  // --- Class selection (if needed) ---
+  if (!selectedClasses) {
+    if (allClasses.length > 0) {
+      console.log('How do you want to select classes?');
+      console.log('  1. Pick from the schedule above (by number)');
+      console.log('  2. Enter day + time manually\n');
+      const method = await ask('Choose 1 or 2: ');
+
+      if (method.trim() === '2') {
+        selectedClasses = await enterManually();
+      } else {
+        selectedClasses = await selectFromSchedule(allClasses);
+      }
+    } else {
+      console.log('You can enter your classes manually by day and time.\n');
+      selectedClasses = await enterManually();
+    }
+
+    if (selectedClasses.length === 0) {
+      console.log('No classes selected. Exiting.');
+      process.exit(0);
+    }
   }
 
-  // Registration schedule
-  console.log('\n--- Registration schedule ---\n');
-  console.log('When does your gym open registration for next week?\n');
+  // --- Registration schedule (if needed) ---
+  if (regTime === null) {
+    console.log('\n--- Registration schedule ---\n');
+    console.log('When does your gym open registration for next week?\n');
 
-  const regDayInput = await ask('Registration day (e.g., thursday, or press Enter for every day): ');
-  const regDay = regDayInput.trim().toLowerCase();
+    const regDayInput = await ask('Registration day (e.g., thursday, or press Enter for every day): ');
+    const dayVal = regDayInput.trim().toLowerCase();
+    if (dayVal && !DAYS.includes(dayVal)) {
+      console.log(`Warning: "${dayVal}" is not a valid day. Running every day instead.`);
+    }
+    regDay = dayVal && DAYS.includes(dayVal) ? dayVal : null;
 
-  if (regDay && !DAYS.includes(regDay)) {
-    console.log(`Warning: "${regDay}" is not a valid day. Running every day instead.`);
+    const regTimeInput = await ask('Registration time in HH:MM (or press Enter for 15:00): ');
+    const timeVal = regTimeInput.trim() || '15:00';
+    if (!VALID_TIME.test(timeVal)) {
+      console.log(`Warning: "${timeVal}" is not a valid time. Using 15:00 instead.`);
+    }
+    regTime = VALID_TIME.test(timeVal) ? timeVal : '15:00';
   }
 
-  const regTimeInput = await ask('Registration time in HH:MM (or press Enter for 15:00): ');
-  const regTime = regTimeInput.trim() || '15:00';
-
-  if (!VALID_TIME.test(regTime)) {
-    console.log(`Warning: "${regTime}" is not a valid time. Using 15:00 instead.`);
-  }
-
-  const validRegTime = VALID_TIME.test(regTime) ? regTime : '15:00';
-  const validRegDay = regDay && DAYS.includes(regDay) ? regDay : null;
-
-  // Build config
+  // --- Save ---
   const config = {
-    ...(validRegDay ? { registrationDay: validRegDay } : {}),
-    registrationTime: validRegTime,
+    ...(regDay ? { registrationDay: regDay } : {}),
+    registrationTime: regTime,
     classes: selectedClasses,
   };
 
@@ -181,8 +249,8 @@ async function main() {
   console.log(`   ARBOX_EMAIL     = ${email}`);
   console.log(`   ARBOX_PASSWORD  = (your password)`);
   console.log(`   ARBOX_CONFIG    = ${JSON.stringify(config)}`);
-  const dayMsg = validRegDay ? `every ${validRegDay}` : 'every day';
-  console.log(`3. GitHub Actions will run ${dayMsg} at ${validRegTime} Israel time.\n`);
+  const dayMsg = regDay ? `every ${regDay}` : 'every day';
+  console.log(`3. GitHub Actions will run ${dayMsg} at ${regTime} Israel time.\n`);
 
   rl.close();
 }
