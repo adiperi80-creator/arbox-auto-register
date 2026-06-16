@@ -94,6 +94,14 @@ async function main() {
     }
   }
 
+  if (config.registrationDelay) {
+    const seconds = parseInt(config.registrationDelay);
+    if (seconds > 0) {
+      console.log(`Waiting ${seconds} seconds before starting...\n`);
+      await new Promise(r => setTimeout(r, seconds * 1000));
+    }
+  }
+
   const creds = loadCredentials();
 
   console.log(`Logging in as ${creds.email}...`);
